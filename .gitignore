@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+checkpoints/
+out.txt
+train_out.txt
+
+# datasets and databases are rebuilt by the scripts
+data/*
+!data/thresholds.json
+
+# generated output, but keep the charts for the README
+output/*
+!output/charts/
