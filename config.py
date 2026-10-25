@@ -64,6 +64,7 @@ def get_kafka_logs_dir() -> Path:
     else:
         # macOS / Linux candidates
         candidates = [
+            Path("/opt/homebrew/var/lib/kraft-combined-logs"),
             Path("/tmp/kafka-logs"),
             Path("/var/log/kafka"),
             Path.home() / "kafka" / "kafka-logs",
@@ -77,9 +78,18 @@ def get_kafka_logs_dir() -> Path:
 
 
 def setup_spark_environment() -> None:
-    """Configures Python runtime and Hadoop environment across Windows, macOS, and Linux."""
+    """Configures Python runtime and Hadoop/Java environment across Windows, macOS, and Linux."""
     os.environ["PYSPARK_PYTHON"] = sys.executable
     os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
+
+    # macOS: Automatically use Homebrew openjdk@17 if JAVA_HOME is not explicitly configured
+    if sys.platform == "darwin":
+        mac_jdk17 = Path("/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home")
+        if mac_jdk17.exists() and ("JAVA_HOME" not in os.environ or not os.path.exists(os.environ["JAVA_HOME"])):
+            os.environ["JAVA_HOME"] = str(mac_jdk17)
+            bin_dir = str(mac_jdk17 / "bin")
+            if bin_dir not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
 
     # Windows-specific Hadoop/winutils setup
     if sys.platform == "win32":
