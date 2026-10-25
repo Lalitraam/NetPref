@@ -5,11 +5,24 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parent
-KAFKA_LOGS = Path(r"D:\kafka\kafka-logs")
+from config import (
+    CHARTS_DIR,
+    DATA_DIR,
+    HBASE_DB,
+    METRICS_PATH,
+    MODEL_DIR,
+    REPORTS_DIR,
+    ROOT_DIR,
+    SCORED_FLOWS_DIR,
+    THRESHOLDS_PATH,
+    WAREHOUSE_DB,
+    get_kafka_logs_dir,
+)
+
+KAFKA_LOGS = get_kafka_logs_dir()
 DBS = {
-    "warehouse": ROOT / "data" / "warehouse.duckdb",
-    "hbase": ROOT / "data" / "hbase_lite.duckdb",
+    "warehouse": WAREHOUSE_DB,
+    "hbase": HBASE_DB,
 }
 
 pd.set_option("display.width", 220)
@@ -17,16 +30,16 @@ pd.set_option("display.max_columns", 40)
 pd.set_option("display.max_colwidth", 38)
 
 LOCATIONS = [
-    ("Scored flows (streaming output)", ROOT / "output" / "scored_flows"),
+    ("Scored flows (streaming output)", SCORED_FLOWS_DIR),
     ("HBase-style store (flows, alerts)", DBS["hbase"]),
     ("Warehouse (fact_flows, v_alerts)", DBS["warehouse"]),
-    ("Charts (PNG)", ROOT / "output" / "charts"),
-    ("SQL reports (CSV)", ROOT / "output" / "reports"),
-    ("Trained ML model", ROOT / "models" / "rf_congestion"),
-    ("Model metrics", ROOT / "models" / "metrics.json"),
-    ("Cleaned train data", ROOT / "data" / "clean_train.parquet"),
-    ("Cleaned test data", ROOT / "data" / "clean_test.parquet"),
-    ("Label thresholds", ROOT / "data" / "thresholds.json"),
+    ("Charts (PNG)", CHARTS_DIR),
+    ("SQL reports (CSV)", REPORTS_DIR),
+    ("Trained ML model", MODEL_DIR),
+    ("Model metrics", METRICS_PATH),
+    ("Cleaned train data", DATA_DIR / "clean_train.parquet"),
+    ("Cleaned test data", DATA_DIR / "clean_test.parquet"),
+    ("Label thresholds", THRESHOLDS_PATH),
     ("Kafka raw events (topic 'flows')", KAFKA_LOGS),
 ]
 
@@ -104,7 +117,7 @@ def show_db(label, path):
 
 def show_parquet():
     section("3. STREAMING OUTPUT (parquet): output/scored_flows")
-    p = ROOT / "output" / "scored_flows"
+    p = SCORED_FLOWS_DIR
     if not p.exists():
         print("Not found - run stream_job.py first.")
         return
@@ -116,7 +129,7 @@ def show_parquet():
 
 def show_model():
     section("4. MODEL RESULTS (models/metrics.json)")
-    p = ROOT / "models" / "metrics.json"
+    p = METRICS_PATH
     if not p.exists():
         print("Not found - run train_model.py first.")
         return

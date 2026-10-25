@@ -3,10 +3,10 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parent
-SRC = ROOT / "output" / "scored_flows"
-DB = ROOT / "data" / "hbase_lite.duckdb"
-ALERT_PROB = 0.8
+from config import ALERT_PROB, HBASE_DB, SCORED_FLOWS_DIR
+
+SRC = SCORED_FLOWS_DIR
+DB = HBASE_DB
 MAX_TS = 9_999_999_999_999  # for reversed timestamps (newest sorts first)
 
 # qualifier -> column family

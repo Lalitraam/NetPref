@@ -1,68 +1,35 @@
 import json
-import os
-import sys
 from pathlib import Path
-
-# ---- Windows + Hadoop setup (must run before Spark starts) ----
-HADOOP_HOME_WIN = r"C:\hadoop"      # for environment variables
-HADOOP_HOME_FWD = "C:/hadoop"       # for Java options (backslashes get stripped)
-HADOOP_BIN_WIN = HADOOP_HOME_WIN + r"\bin"
-HADOOP_BIN_FWD = HADOOP_HOME_FWD + "/bin"
-if not os.path.exists(HADOOP_BIN_WIN + r"\hadoop.dll"):
-    sys.exit(r"hadoop.dll not found in C:\hadoop\bin - add it, then run again")
-os.environ["HADOOP_HOME"] = HADOOP_HOME_WIN
-os.environ["hadoop.home.dir"] = HADOOP_HOME_WIN
-os.environ["PATH"] = HADOOP_BIN_WIN + os.pathsep + os.environ["PATH"]
-
-# make Spark use this venv's Python
-os.environ["PYSPARK_PYTHON"] = sys.executable
-os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import RandomForestClassifier
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.ml.feature import OneHotEncoder, StringIndexer, VectorAssembler
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
-ROOT = Path(__file__).resolve().parent
-DATA = ROOT / "data"
-MODELS = ROOT / "models"
-MODELS.mkdir(exist_ok=True)
-
-CAT_COLS = ["proto", "service", "state"]
-NUM_COLS = [
-    "dur", "spkts", "dpkts", "sbytes", "dbytes", "rate", "sload", "dload",
-    "sinpkt", "dinpkt", "smean", "dmean", "swin", "dwin",
-    "tcprtt", "synack", "ackdat", "ct_src_dport_ltm", "ct_dst_sport_ltm",
-]
-
-spark = (
-    SparkSession.builder
-    .master("local[*]")
-    .appName("netperf-train")
-    .config("spark.driver.host", "127.0.0.1")
-    .config("spark.driver.bindAddress", "127.0.0.1")
-    .config("spark.driver.memory", "4g")
-    .config("spark.sql.shuffle.partitions", "8")
-    .config("spark.ui.showConsoleProgress", "false")
-    .config(
-        "spark.driver.extraJavaOptions",
-        f"-Dhadoop.home.dir={HADOOP_HOME_FWD} -Djava.library.path={HADOOP_BIN_FWD}",
-    )
-    .getOrCreate()
+from config import (
+    CAT_COLS,
+    DATA_DIR,
+    METRICS_PATH,
+    MODEL_DIR,
+    MODELS_DIR,
+    NUM_COLS,
+    get_spark_session,
 )
-spark.sparkContext.setLogLevel("ERROR")
+
+MODELS_DIR.mkdir(exist_ok=True)
+
+spark = get_spark_session("netperf-train")
 
 print("Loading data...", flush=True)
 train = (
-    spark.read.parquet((DATA / "clean_train.parquet").as_uri())
+    spark.read.parquet((DATA_DIR / "clean_train.parquet").as_uri())
     .withColumn("label", F.col("degraded").cast("double"))
     .repartition(8)
     .cache()
 )
 test = (
-    spark.read.parquet((DATA / "clean_test.parquet").as_uri())
+    spark.read.parquet((DATA_DIR / "clean_test.parquet").as_uri())
     .withColumn("label", F.col("degraded").cast("double"))
 )
 print("train rows:", train.count(), "| test rows:", test.count(), flush=True)
@@ -91,7 +58,7 @@ print("Training Random Forest (can take a few minutes)...", flush=True)
 model = pipeline.fit(train)
 
 print("Training done. Saving model...", flush=True)
-model.write().overwrite().save((MODELS / "rf_congestion").as_uri())
+model.write().overwrite().save(MODEL_DIR.as_uri())
 print("Model saved. Evaluating...", flush=True)
 
 preds = model.transform(test)
@@ -149,7 +116,7 @@ for n, v in top:
     print(f"  {n:25s} {v:.4f}")
 metrics["top_features"] = top
 
-with open(MODELS / "metrics.json", "w") as f:
+with open(METRICS_PATH, "w") as f:
     json.dump(metrics, f, indent=2)
 print("\nSaved metrics to models/metrics.json", flush=True)
 

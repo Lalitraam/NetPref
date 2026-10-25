@@ -2,7 +2,7 @@
 
 A real-time big-data pipeline in Python. It streams network traffic through **Kafka**, uses **Spark Structured Streaming + MLlib** to score every flow with a machine-learning model that predicts degraded performance, stores the results in a **wide-column (HBase-style) store** and a **DuckDB warehouse**, and shows per-link health and alerts in a **Streamlit dashboard**.
 
-Everything runs locally on **Windows** (no Docker, no WSL, no Linux).
+Runs locally on **macOS, Linux, and Windows**.
 
 ---
 
@@ -93,6 +93,8 @@ The warehouse has a fact table `fact_flows` (one row per flow) and a view `v_ale
 
 ```
 .
+├── config.py           # centralized cross-platform paths, constants, Spark session builder
+├── requirements.txt    # pinned dependencies
 ├── prepare_data.py     # clean data, build the degraded label, save thresholds
 ├── train_model.py      # train + save the Spark MLlib Random Forest
 ├── producer.py         # replay test flows into Kafka (topic: flows)
@@ -111,138 +113,174 @@ The warehouse has a fact table `fact_flows` (one row per flow) and a view `v_ale
 
 ---
 
-## Setup (Windows 10/11)
+## Setup
 
-### 1. Python 3.11
-Install **Python 3.11** from python.org and tick "Add python.exe to PATH". Use 3.11: newer versions (3.12 and above) may lack prebuilt wheels for some packages and force a C++ build.
+### 1. Python (3.10 – 3.12 recommended, e.g. 3.11)
+- **macOS (Homebrew):** `brew install python@3.11`
+- **Linux (Ubuntu/Debian):** `sudo apt update && sudo apt install -y python3.11 python3.11-venv python3-pip`
+- **Windows:** Download Python 3.11 from python.org and check "Add python.exe to PATH".
 
 ### 2. Java 17
-Install **Eclipse Temurin JDK 17** (Windows `.msi`, from adoptium.net) with "Set JAVA_HOME" and "Add to PATH" enabled. Check with `java -version`.
+- **macOS (Homebrew):** `brew install openjdk@17`
+- **Linux (Ubuntu/Debian):** `sudo apt install -y openjdk-17-jdk`
+- **Windows:** Install **Eclipse Temurin JDK 17** from adoptium.net with "Set JAVA_HOME" and "Add to PATH" enabled. Check with `java -version`.
 
-### 3. Hadoop helper files for Spark on Windows
+### 3. Hadoop helper files for Spark (Windows ONLY)
+*On macOS and Linux, skip this step completely — Hadoop native binaries are not required.*
+
+On Windows only:
 1. Create `C:\hadoop\bin`.
-2. From the **cdarlint/winutils** GitHub repo, folder `hadoop-3.3.5\bin`, download `winutils.exe` and `hadoop.dll` into `C:\hadoop\bin`.
+2. From the **cdarlint/winutils** GitHub repo (folder `hadoop-3.3.5\bin`), download `winutils.exe` and `hadoop.dll` into `C:\hadoop\bin`.
 3. Set the environment variable `HADOOP_HOME` to `C:\hadoop` and add `C:\hadoop\bin` to your `Path`.
-4. Restart VS Code / your terminals.
 
-`train_model.py` and `stream_job.py` expect Hadoop in `C:\hadoop` (edit the `HADOOP_HOME_WIN` / `HADOOP_HOME_FWD` lines at the top if yours is elsewhere). If saving the model fails with `UnsatisfiedLinkError`, also copy `hadoop.dll` to `C:\Windows\System32`.
+### 4. Apache Kafka 3.9 (KRaft mode, no Zookeeper)
 
-### 4. Apache Kafka 3.9 (no Docker)
-1. Download the Kafka 3.9.x binary (Scala 2.13) from kafka.apache.org/downloads.
-2. Extract it so that `D:\kafka\bin\windows\kafka-server-start.bat` exists. Keep the path short.
-3. In `D:\kafka\config\kraft\server.properties`, set:
+#### macOS (via Homebrew)
+```bash
+brew install kafka
+# Start Kafka service:
+brew services start kafka
+# Or start in foreground with default KRaft config:
+kafka-server-start /opt/homebrew/etc/kafka/kraft/server.properties
 ```
-   log.dirs=D:/kafka/kafka-logs
-```
-4. In a standalone PowerShell window, **format the storage once** (never run this again, it wipes Kafka's data):
-```powershell
+
+#### Linux / Manual Archive (macOS / Linux)
+1. Download the Kafka 3.9.x binary (Scala 2.13) from kafka.apache.org/downloads and extract it (e.g. to `~/kafka`).
+2. Format storage (run once):
+   ```bash
+   cd ~/kafka
+   KAFKA_CLUSTER_ID="$(bin/kafka-storage.sh random-uuid)"
+   bin/kafka-storage.sh format -t $KAFKA_CLUSTER_ID -c config/kraft/server.properties
+   ```
+3. Start Kafka:
+   ```bash
+   bin/kafka-server-start.sh config/kraft/server.properties
+   ```
+4. Create the topic:
+   ```bash
+   bin/kafka-topics.sh --create --topic flows --bootstrap-server localhost:9092
+   ```
+
+#### Windows
+1. Download Kafka 3.9.x binary and extract to `D:\kafka` (or `C:\kafka`).
+2. In `config\kraft\server.properties`, set `log.dirs=D:/kafka/kafka-logs`.
+3. In PowerShell, format storage (run once):
+   ```powershell
    cd D:\kafka
-   .\bin\windows\kafka-storage.bat random-uuid
-   .\bin\windows\kafka-storage.bat format -t PASTE_ID_HERE -c .\config\kraft\server.properties
-```
-5. Start Kafka (see "Run the demo" below), then create the topic once:
-```powershell
-   cd D:\kafka
+   $id = .\bin\windows\kafka-storage.bat random-uuid
+   .\bin\windows\kafka-storage.bat format -t $id -c .\config\kraft\server.properties
+   ```
+4. Start Kafka:
+   ```powershell
+   .\bin\windows\kafka-server-start.bat .\config\kraft\server.properties
+   ```
+5. Create the topic:
+   ```powershell
    .\bin\windows\kafka-topics.bat --create --topic flows --bootstrap-server localhost:9092
+   ```
+
+### 5. Project Environment
+
+#### macOS / Linux
+```bash
+git clone https://github.com/YOUR-USERNAME/YOUR-REPO.git
+cd YOUR-REPO
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-The message `'wmic' is not recognized` when Kafka starts is harmless.
-
-### 5. Project environment
+#### Windows (PowerShell)
 ```powershell
 git clone https://github.com/YOUR-USERNAME/YOUR-REPO.git
 cd YOUR-REPO
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install pyspark==3.5.3 kafka-python pandas scikit-learn pyarrow duckdb matplotlib streamlit
+pip install -r requirements.txt
 ```
-If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
 
-Check Spark works: `python test_spark.py` should print a table with ids 0 to 4.
+Verify Spark works:
+```bash
+python test_spark.py
+```
+This should print a Spark table with IDs 0 to 4.
 
 ### 6. Dataset
-Put the two UNSW-NB15 Parquet files in `data/` (see Data above).
+Download the UNSW-NB15 Parquet files into `data/`:
+- `data/UNSW_NB15_training-set.parquet`
+- `data/UNSW_NB15_testing-set.parquet`
 
 ---
 
 ## Run
 
-### One-time: prepare data and train the model
-```powershell
+### 1. Prepare data and train the model (One-time)
+```bash
 python prepare_data.py
 python train_model.py
 ```
-`prepare_data.py` creates the cleaned data and `data/thresholds.json`. `train_model.py` saves the model to `models/rf_congestion` and prints the test-set results (a few minutes).
+`prepare_data.py` creates the cleaned data and `data/thresholds.json`. `train_model.py` saves the model to `models/rf_congestion` and logs test metrics to `models/metrics.json`.
 
-### Run the demo
-Four windows. Only Kafka runs in a standalone PowerShell; the other three are VS Code terminals with `(.venv)` active.
+### 2. Run the real-time demo
+Run each component in a separate terminal with `(.venv)` activated:
 
-| # | Where | What | Command |
-|---|---|---|---|
-| 1 | Standalone PowerShell | Kafka server | `cd D:\kafka` then `$env:KAFKA_HEAP_OPTS="-Xmx1G -Xms1G"` then `.\bin\windows\kafka-server-start.bat .\config\kraft\server.properties` |
-| 2 | VS Code terminal 1 | Stream job | `python stream_job.py --seconds 300` |
-| 3 | VS Code terminal 2 | Dashboard | `streamlit run dashboard.py` |
-| 4 | VS Code terminal 3 | Producer | `python producer.py --rate 100 --limit 2000` |
+| # | Component | Terminal Command |
+|---|---|---|
+| 1 | **Kafka server** | macOS/Linux: `kafka-server-start ...` or Windows: `.\bin\windows\kafka-server-start.bat ...` |
+| 2 | **Stream job** | `python stream_job.py --seconds 300` |
+| 3 | **Dashboard** | `streamlit run dashboard.py` |
+| 4 | **Producer** | `python producer.py --rate 100 --limit 2000` |
 
-Order and timing:
-1. Start Kafka and wait for `Kafka Server started`.
-2. Start the stream job. Wait for `Streaming started...`, then about 15 more seconds. The first run downloads the Spark-Kafka connector from the internet. The job reads only events sent after it starts, and it clears `checkpoints/` and `output/scored_flows/` on every start.
-3. Start the dashboard (opens at http://localhost:8501) on the **Live monitor** tab.
-4. Start the producer **once** and watch the cards, charts, and alert feed update.
-5. When the stream job stops, refresh the stored data:
-```powershell
+Order of execution:
+1. Start Kafka and verify it is listening on `localhost:9092`.
+2. Start the stream job (`python stream_job.py`). Wait until `Streaming started...` appears. (The first run downloads the Spark-Kafka connector jar).
+3. Start the dashboard (`streamlit run dashboard.py`), open http://localhost:8501, and navigate to **Live monitor**.
+4. Start the producer (`python producer.py --rate 100 --limit 2000`) and watch live cards, charts, and alert feeds update.
+5. After the stream completes, refresh the offline analytical stores:
+   ```bash
    python hbase_layer.py
    python warehouse.py
-```
-6. In the dashboard, press F5 and open **Analytics** and **Data explorer**.
-7. Stop the dashboard and Kafka with `Ctrl+C` (answer `y` if asked `Terminate batch job (Y/N)?`).
+   ```
+6. In the dashboard, view the **Analytics** and **Data explorer** tabs.
 
-If the same events were sent twice by mistake, run `python dedupe_output.py` before step 5.
-
-### Look inside the stored data
-```powershell
-python show_outputs.py                                              # locations, tables, samples, model results
+### 3. Inspect stored data & run SQL
+```bash
+python show_outputs.py                                              # Inspect locations, schemas, and metrics
 python show_outputs.py --sql "SHOW TABLES"
 python show_outputs.py --sql "SELECT * FROM fact_flows LIMIT 5"
 python show_outputs.py --db hbase --sql "SELECT * FROM flows LIMIT 10"
 ```
 
-### Where everything is stored
+### Storage Locations
 
-| What | Location |
+| Artifact | Location |
 |---|---|
-| Scored flows (stream output) | `output/scored_flows/` (Parquet) |
+| Scored flows (streaming output) | `output/scored_flows/` (Parquet) |
 | HBase-style store | `data/hbase_lite.duckdb` |
-| Warehouse | `data/warehouse.duckdb` |
-| Charts / SQL reports | `output/charts/`, `output/reports/` |
-| Trained model + metrics | `models/rf_congestion/`, `models/metrics.json` |
-| Raw Kafka events | `D:\kafka\kafka-logs\` |
+| DuckDB Warehouse | `data/warehouse.duckdb` |
+| Generated charts & reports | `output/charts/`, `output/reports/` |
+| Trained ML model + metrics | `models/rf_congestion/`, `models/metrics.json` |
+| Raw Kafka events | Configured via `KAFKA_LOGS_DIR` (or platform default) |
 
 ---
 
-## Limitations (please read)
+## Limitations
 
-- **Links are simulated.** Flows are assigned to 8 links at random, so differences between links are noise by design. They demonstrate per-link monitoring and are not findings.
-- **Only TCP shows packet loss** in this dataset, so UDP flows can never be labelled degraded.
-- **The label is rule-based** (loss or jitter above a percentile). The model does not see those columns, but some inputs correlate with them, which is part of why the scores are so high. High AUC here does not mean the problem is easy in the real world.
-- **The "HBase" layer is an emulation** of the HBase wide-column data model (row keys, column families, cells, get/scan) on top of DuckDB. Real HBase is not practical on native Windows. The design carries over to real HBase with small code changes.
-- **The test split has more attack traffic** than the training split, so its degraded share is slightly higher (24.7% vs 21.3%).
-- The dashboard displays times in `Asia/Kolkata` (change `TZ` at the top of `dashboard.py`).
+- **Links are simulated:** Flows are assigned to 8 links at random, so variations between links are noise by design to demonstrate per-link telemetry.
+- **Only TCP shows packet loss:** In the UNSW-NB15 dataset, loss statistics are recorded for TCP flows; UDP flows are labeled based on jitter.
+- **Rule-based labeling:** Ground truth is derived from quantile thresholds on loss and jitter. Model inputs omit loss and jitter to avoid direct target leakage.
+- **HBase emulation:** The wide-column store emulates HBase primitives (row-keys, column families, cells, scans) using DuckDB for local execution without requiring a heavy distributed cluster.
 
 ---
 
 ## Troubleshooting
 
-| Problem | Fix |
+| Problem | Root Cause & Resolution |
 |---|---|
-| `pip install` tries to compile and asks for "Microsoft C++ Build Tools" | Your venv uses a too-new Python. Recreate it with Python 3.11: `py -3.11 -m venv .venv` |
-| Spark: `Invalid Spark URL ... Lalit_PC...` | The PC name contains underscores. The scripts set `spark.driver.host` to `127.0.0.1`, keep those two config lines in every Spark script |
-| `UnsatisfiedLinkError ... NativeIO$Windows` | `hadoop.dll` is missing from `C:\hadoop\bin` (also copy it to `C:\Windows\System32`) |
-| `Hadoop home directory C:hadoop is not an absolute path` | Use forward slashes (`C:/hadoop`) in Java options, as in the provided scripts |
-| Repeated `Connection to node -1 ... could not be established` | Kafka is not running. Start it and wait for `Kafka Server started` |
-| Lots of `SUCCESS: The process ... has been terminated` at the end of a Spark run | Normal Windows cleanup output, not an error |
-| Red errors after pressing `Ctrl+C` on the stream job | Harmless (Spark was stopped mid-batch). Use `--seconds N` for a clean stop |
-| Dashboard says "Waiting for data" | Check that `output/scored_flows/` has `.parquet` files and the stream job printed `[flows] batch ...` lines |
-
----
+| `pip install` errors asking for C++ build tools | Use Python 3.10–3.12 (e.g. 3.11) where prebuilt binary wheels are readily available for all dependencies. |
+| Spark: `Invalid Spark URL ...` | Occurs when hostnames contain special characters or underscores. Both `stream_job.py` and `train_model.py` automatically bind `spark.driver.host` to `127.0.0.1`. |
+| Windows: `UnsatisfiedLinkError ... NativeIO$Windows` | Missing `hadoop.dll`. Place `hadoop.dll` in `C:\hadoop\bin` and verify `HADOOP_HOME` is set. |
+| macOS/Linux: `Connection refused: localhost:9092` | Kafka is not running. Ensure Kafka service is started before launching the stream job or producer. |
+| Dashboard shows "Waiting for data" | Verify that `stream_job.py` is actively writing to `output/scored_flows/` and the producer is running. |

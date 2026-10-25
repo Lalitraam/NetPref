@@ -3,9 +3,10 @@ from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parent
-SRC = ROOT / "output" / "scored_flows"
-TMP = ROOT / "output" / "_dedup.parquet"
+from config import OUTPUT_DIR, SCORED_FLOWS_DIR
+
+SRC = SCORED_FLOWS_DIR
+TMP = OUTPUT_DIR / "_dedup.parquet"
 
 df = pd.read_parquet(SRC)
 before = len(df)

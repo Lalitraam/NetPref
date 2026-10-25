@@ -7,14 +7,14 @@ import pandas as pd
 matplotlib.use("Agg")  # save charts to files, no window needed
 import matplotlib.pyplot as plt
 
-ROOT = Path(__file__).resolve().parent
-SRC = ROOT / "output" / "scored_flows"
-DB = ROOT / "data" / "warehouse.duckdb"
-REPORTS = ROOT / "output" / "reports"
-CHARTS = ROOT / "output" / "charts"
+from config import ALERT_PROB, CHARTS_DIR, REPORTS_DIR, SCORED_FLOWS_DIR, WAREHOUSE_DB
+
+SRC = SCORED_FLOWS_DIR
+DB = WAREHOUSE_DB
+REPORTS = REPORTS_DIR
+CHARTS = CHARTS_DIR
 REPORTS.mkdir(parents=True, exist_ok=True)
 CHARTS.mkdir(parents=True, exist_ok=True)
-ALERT_PROB = 0.8
 
 # ---------- load into the warehouse ----------
 df = pd.read_parquet(SRC)

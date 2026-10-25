@@ -1,90 +1,57 @@
 import argparse
-import os
 import shutil
-import sys
 from pathlib import Path
-
-# ---- Windows + Hadoop setup (same as train_model.py) ----
-HADOOP_HOME_WIN = r"C:\hadoop"
-HADOOP_HOME_FWD = "C:/hadoop"
-HADOOP_BIN_WIN = HADOOP_HOME_WIN + r"\bin"
-HADOOP_BIN_FWD = HADOOP_HOME_FWD + "/bin"
-if not os.path.exists(HADOOP_BIN_WIN + r"\hadoop.dll"):
-    sys.exit(r"hadoop.dll not found in C:\hadoop\bin - add it, then run again")
-os.environ["HADOOP_HOME"] = HADOOP_HOME_WIN
-os.environ["hadoop.home.dir"] = HADOOP_HOME_WIN
-os.environ["PATH"] = HADOOP_BIN_WIN + os.pathsep + os.environ["PATH"]
-os.environ["PYSPARK_PYTHON"] = sys.executable
-os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
 from pyspark.ml import PipelineModel
 from pyspark.ml.functions import vector_to_array
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+
+from config import (
+    ALERT_PROB,
+    CHECKPOINTS_DIR,
+    KAFKA_BOOTSTRAP_SERVERS,
+    KAFKA_TOPIC,
+    MODEL_DIR,
+    SCORED_FLOWS_DIR,
+    STREAMING_SCHEMA,
+    get_spark_session,
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--seconds", type=int, default=0,
                     help="auto-stop after N seconds (0 = run until Ctrl+C)")
+parser.add_argument("--bootstrap-server", default=KAFKA_BOOTSTRAP_SERVERS,
+                    help="Kafka bootstrap servers (default from config/env)")
+parser.add_argument("--topic", default=KAFKA_TOPIC,
+                    help="Kafka topic to subscribe to")
 args = parser.parse_args()
 
-ROOT = Path(__file__).resolve().parent
-MODELS = ROOT / "models"
-CHECKPOINTS = ROOT / "checkpoints"
-OUT_FLOWS = ROOT / "output" / "scored_flows"
-ALERT_PROB = 0.8   # a flow counts as an "alert" at or above this probability
-
 # clean slate on every run (demo mode)
-shutil.rmtree(CHECKPOINTS, ignore_errors=True)
-shutil.rmtree(OUT_FLOWS, ignore_errors=True)
-OUT_FLOWS.parent.mkdir(exist_ok=True)
+shutil.rmtree(CHECKPOINTS_DIR, ignore_errors=True)
+shutil.rmtree(SCORED_FLOWS_DIR, ignore_errors=True)
+SCORED_FLOWS_DIR.parent.mkdir(exist_ok=True)
 
-spark = (
-    SparkSession.builder
-    .master("local[*]")
-    .appName("netperf-stream")
-    .config("spark.driver.host", "127.0.0.1")
-    .config("spark.driver.bindAddress", "127.0.0.1")
-    .config("spark.driver.memory", "4g")
-    .config("spark.sql.shuffle.partitions", "8")
-    .config("spark.ui.showConsoleProgress", "false")
-    .config("spark.jars.packages",
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3")
-    .config(
-        "spark.driver.extraJavaOptions",
-        f"-Dhadoop.home.dir={HADOOP_HOME_FWD} -Djava.library.path={HADOOP_BIN_FWD}",
-    )
-    .getOrCreate()
+spark = get_spark_session(
+    "netperf-stream",
+    packages=["org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3"],
 )
-spark.sparkContext.setLogLevel("ERROR")
-
-SCHEMA = """
-  flow_id long, proto string, service string, state string,
-  dur double, spkts long, dpkts long, sbytes long, dbytes long,
-  rate double, sload double, dload double, sinpkt double, dinpkt double,
-  smean long, dmean long, swin long, dwin long,
-  tcprtt double, synack double, ackdat double,
-  ct_src_dport_ltm long, ct_dst_sport_ltm long,
-  sloss long, dloss long, sjit double, djit double,
-  total_pkts long, total_bytes long, loss_ratio double, avg_jitter double,
-  attack_cat string, true_degraded int, link_id string, event_ts_ms long
-"""
 
 raw = (
     spark.readStream.format("kafka")
-    .option("kafka.bootstrap.servers", "localhost:9092")
-    .option("subscribe", "flows")
+    .option("kafka.bootstrap.servers", args.bootstrap_server)
+    .option("subscribe", args.topic)
     .option("startingOffsets", "latest")
     .option("maxOffsetsPerTrigger", 500)   # ~500 events per micro-batch
     .load()
 )
 
 events = (
-    raw.select(F.from_json(F.col("value").cast("string"), SCHEMA).alias("e"))
+    raw.select(F.from_json(F.col("value").cast("string"), STREAMING_SCHEMA).alias("e"))
     .select("e.*")
     .withColumn("event_time", (F.col("event_ts_ms") / 1000).cast("timestamp"))
 )
 
-model = PipelineModel.load((MODELS / "rf_congestion").as_uri())
+model = PipelineModel.load(MODEL_DIR.as_uri())
 scored = (
     model.transform(events)
     .withColumn("degraded_prob", vector_to_array("probability")[1])
@@ -106,7 +73,7 @@ def handle_flows(df, batch_id):
         (F.col("prediction") == 1.0) & (F.col("degraded_prob") >= ALERT_PROB)
     ).count()
     correct = df.filter(F.col("prediction") == F.col("true_degraded")).count()
-    df.write.mode("append").parquet(OUT_FLOWS.as_uri())
+    df.write.mode("append").parquet(SCORED_FLOWS_DIR.as_uri())
     print(f"[flows] batch {batch_id}: {n} scored | {alerts} alerts "
           f"(prob >= {ALERT_PROB}) | agrees with rule label: {correct / n:.1%}",
           flush=True)
@@ -145,13 +112,13 @@ def show_windows(df, batch_id):
 
 q_flows = (
     scored.writeStream.foreachBatch(handle_flows)
-    .option("checkpointLocation", (CHECKPOINTS / "flows").as_uri())
+    .option("checkpointLocation", (CHECKPOINTS_DIR / "flows").as_uri())
     .trigger(processingTime="5 seconds")
     .start()
 )
 q_windows = (
     metrics.writeStream.outputMode("update").foreachBatch(show_windows)
-    .option("checkpointLocation", (CHECKPOINTS / "windows").as_uri())
+    .option("checkpointLocation", (CHECKPOINTS_DIR / "windows").as_uri())
     .trigger(processingTime="5 seconds")
     .start()
 )

@@ -7,19 +7,20 @@ import numpy as np
 import pandas as pd
 from kafka import KafkaProducer
 
-ROOT = Path(__file__).resolve().parent
-DATA = ROOT / "data"
-TOPIC = "flows"
-N_LINKS = 8
+from config import DATA_DIR, KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC, N_LINKS
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--rate", type=int, default=200, help="events per second")
 parser.add_argument("--limit", type=int, default=0, help="max events (0 = all)")
+parser.add_argument("--bootstrap-server", default=KAFKA_BOOTSTRAP_SERVERS,
+                    help="Kafka bootstrap servers (default from config/env)")
+parser.add_argument("--topic", default=KAFKA_TOPIC,
+                    help="Kafka topic to send events to")
 args = parser.parse_args()
 
 # replay the TEST split (the model never trained on it), shuffled
 df = (
-    pd.read_parquet(DATA / "clean_test.parquet")
+    pd.read_parquet(DATA_DIR / "clean_test.parquet")
     .sample(frac=1.0, random_state=42)
     .reset_index(drop=True)
 )
@@ -42,13 +43,13 @@ def to_json(v):
 
 
 producer = KafkaProducer(
-    bootstrap_servers="localhost:9092",
+    bootstrap_servers=args.bootstrap_server,
     value_serializer=to_json,
     key_serializer=lambda k: k.encode("utf-8"),
     linger_ms=20,
 )
 
-print(f"Sending {len(records)} events to topic '{TOPIC}' at ~{args.rate}/sec "
+print(f"Sending {len(records)} events to topic '{args.topic}' at ~{args.rate}/sec "
       f"(Ctrl+C to stop)", flush=True)
 sent = 0
 try:
@@ -56,7 +57,7 @@ try:
         t0 = time.time()
         for rec in records[i:i + args.rate]:
             rec["event_ts_ms"] = int(time.time() * 1000)  # epoch ms, timezone-safe
-            producer.send(TOPIC, key=rec["link_id"], value=rec)
+            producer.send(args.topic, key=rec["link_id"], value=rec)
             sent += 1
         producer.flush()
         print(f"sent {sent}", flush=True)

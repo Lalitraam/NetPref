@@ -7,13 +7,14 @@ import duckdb
 import pandas as pd
 import streamlit as st
 
-ROOT = Path(__file__).resolve().parent
-FLOWS_GLOB = (ROOT / "output" / "scored_flows" / "*.parquet").as_posix()
+from config import ALERT_PROB, HBASE_DB, METRICS_PATH, SCORED_FLOWS_DIR, WAREHOUSE_DB
+
+FLOWS_GLOB = (SCORED_FLOWS_DIR / "*.parquet").as_posix()
 DBS = {
-    "Warehouse (fact_flows, v_alerts)": ROOT / "data" / "warehouse.duckdb",
-    "HBase-style store (flows, alerts)": ROOT / "data" / "hbase_lite.duckdb",
+    "Warehouse (fact_flows, v_alerts)": WAREHOUSE_DB,
+    "HBase-style store (flows, alerts)": HBASE_DB,
 }
-METRICS = ROOT / "models" / "metrics.json"
+METRICS = METRICS_PATH
 TZ = "Asia/Kolkata"  # display timezone
 BLUE, RED, GREEN = "#3b6fb6", "#c0504d", "#4f9a6b"
 
@@ -29,7 +30,7 @@ with st.sidebar:
     st.header("Controls")
     auto = st.toggle("Auto-refresh every 3 s", value=True)
     thr = st.slider("Alert threshold (degraded probability)",
-                    0.50, 0.95, 0.80, 0.05)
+                    0.50, 0.95, ALERT_PROB, 0.05)
     st.caption(f"Times are shown in {TZ}.")
     st.caption("Live data: output/scored_flows (written by stream_job.py)")
 
