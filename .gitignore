@@ -4,6 +4,7 @@ __pycache__/
 checkpoints/
 out.txt
 train_out.txt
+.DS_Store
 
 # datasets and databases are rebuilt by the scripts
 data/*
