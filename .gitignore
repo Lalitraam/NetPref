@@ -9,6 +9,7 @@ train_out.txt
 data/*
 !data/thresholds.json
 
-# generated output, but keep the charts for the README
+# generated output, but keep the charts and screenshots for the README
 output/*
 !output/charts/
+!output/screenshots/

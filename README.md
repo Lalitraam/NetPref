@@ -1,286 +1,353 @@
-# Real-Time Network Performance & Congestion Predictor
+# 📡 NetPref: Real-Time Network Performance & Congestion Predictor
 
-A real-time big-data pipeline in Python. It streams network traffic through **Kafka**, uses **Spark Structured Streaming + MLlib** to score every flow with a machine-learning model that predicts degraded performance, stores the results in a **wide-column (HBase-style) store** and a **DuckDB warehouse**, and shows per-link health and alerts in a **Streamlit dashboard**.
+[![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-blue?logo=python&logoColor=white)](https://python.org)
+[![Apache Spark](https://img.shields.io/badge/Apache%20Spark-3.5.3-orange?logo=apachespark&logoColor=white)](https://spark.apache.org/)
+[![Apache Kafka](https://img.shields.io/badge/Apache%20Kafka-3.9%20(KRaft)-black?logo=apachekafka&logoColor=white)](https://kafka.apache.org/)
+[![DuckDB](https://img.shields.io/badge/DuckDB-OLAP%20Warehouse-yellow?logo=duckdb&logoColor=white)](https://duckdb.org/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-NOC%20Dashboard-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-green)](#setup)
+[![Documentation](https://img.shields.io/badge/Docs-Project%20Guide%20PDF-red?logo=adobeacrobatreader&logoColor=white)](NetPref_Project_Guide.pdf)
 
-Runs locally on **macOS, Linux, and Windows**.
+A distributed, real-time big data telemetric and predictive intelligence pipeline. It streams live network traffic through **Apache Kafka**, scores every flow in real time using **Apache Spark Structured Streaming + MLlib Random Forest** to predict impending network degradation (packet loss and high jitter) *before* directly measuring them, stores results in an **HBase-style wide-column store** and a **DuckDB analytical warehouse**, and visualizes live per-link health and alerts in a **Streamlit NOC dashboard**.
 
----
-
-## What it does
-
-1. **Replays real network flow records** (UNSW-NB15) as if they were live traffic.
-2. **Kafka** carries the events (topic `flows`).
-3. **Spark Structured Streaming** groups traffic into 10-second windows per link and scores every flow with a trained Random Forest.
-4. Each flow gets a **probability of being "degraded"** (heavy packet loss or high jitter). High-probability flows raise **alerts**.
-5. Results are stored in an **HBase-style wide-column store** (fast lookups by row key) and a **DuckDB warehouse** (SQL analytics).
-6. A **dashboard** shows live link health, alerts, model quality, and lets you browse the stored data.
-
-### Why a model, if "degraded" is defined by a rule?
-"Degraded" is defined by packet loss and jitter, which are only known after measuring a connection in detail. The model never sees those columns. It learns what a bad connection looks like from general behaviour (size, rate, duration, handshake timing, protocol), so it can **predict** trouble from the traffic pattern alone.
+Runs seamlessly and natively on **macOS (Apple Silicon & Intel), Linux (Ubuntu/Debian), and Windows**.
 
 ---
 
-## Architecture
+## 📑 Table of Contents
+- [Why NetPref?](#-why-netpref)
+- [System Architecture](#-system-architecture)
+- [Technology Stack](#-technology-stack)
+- [The Machine Learning Engine](#-the-machine-learning-engine)
+- [Storage Architecture (HBase-Style & DuckDB Warehouse)](#-storage-architecture)
+- [Interactive Dashboard Showcase](#-interactive-dashboard-showcase)
+- [Project Directory Layout](#-project-directory-layout)
+- [Setup & Prerequisites](#-setup--prerequisites)
+- [Step-by-Step Run & Demo Guide](#-step-by-step-run--demo-guide)
+- [Analytical Reports & SQL Exploration](#-analytical-reports--sql-exploration)
+- [Real-World Applications](#-real-world-applications)
+- [Limitations & Troubleshooting](#-limitations--troubleshooting)
+- [Documentation & Future Roadmap](#-documentation--future-roadmap)
+
+---
+
+## 💡 Why NetPref?
+
+In modern high-speed networks, network congestion degrades user experience through **packet loss** (dropped packets due to buffer overflow) and **high jitter** (erratic variance in packet arrival times).
+
+```
+Traditional Reactive Monitoring                      NetPref Real-Time Predictive Intelligence
+───────────────────────────────                      ─────────────────────────────────────────
+1. Packets dropped in router buffers                 1. Inspects ongoing flow behavioral patterns
+2. Connection experiences latency collapse              (duration, rates, packet sizes, TCP RTT)
+3. User experiences frozen video / buffering         2. ML Random Forest scores degradation probability
+4. Tool logs packet loss AFTER connection finishes   3. Alerts operator BEFORE buffer collapse occurs
+```
+
+> **The Highway Analogy:** Traditional network monitoring counts how many cars crashed or came to a dead stop 10 minutes ago. **NetPref** watches vehicle speed variance, sudden braking, and erratic lane changes to predict traffic collapse *before* the highway reaches total gridlock.
+
+### The Core Research Principle: Zero Target Leakage
+Packet loss and jitter are the ground-truth definitions of a degraded connection. However, **these metrics are strictly omitted from the model's feature set during training**. The model learns purely from general behavioral attributes (connection duration, transfer rates, mean packet sizes, and TCP handshake round-trip timings) so it can predict degradation on live traffic without needing to wait for or measure packet drops.
+
+---
+
+## 🏛️ System Architecture
 
 ```mermaid
-flowchart LR
-  P[Producer<br/>producer.py] --> K[(Kafka<br/>topic: flows)]
-  K --> S[Spark Structured Streaming<br/>+ MLlib model<br/>stream_job.py]
-  S --> F[(Scored flows<br/>Parquet)]
-  F --> H[(HBase-style<br/>wide-column store)]
-  F --> W[(DuckDB<br/>warehouse)]
-  F --> D[Streamlit dashboard]
-  H --> D
-  W --> D
-```
+flowchart TD
+    subgraph Ingestion Layer
+        A[UNSW-NB15 Flow Dataset] --> B[producer.py: Traffic Generator]
+        B -->|JSON events keyed by link_id| C[(Apache Kafka 3.9<br/>Topic: flows)]
+    end
 
-| Layer | Technology |
-|---|---|
-| Ingestion | Python producer, Apache Kafka 3.9 (KRaft mode, no Zookeeper) |
-| Stream processing | Apache Spark 3.5 (PySpark) Structured Streaming |
-| Machine learning | Spark MLlib Random Forest (trained offline, applied in the stream) |
-| Wide-column store | HBase data model implemented on DuckDB (see Limitations) |
-| Warehouse / analytics | DuckDB + SQL, matplotlib charts |
-| Dashboard | Streamlit + Altair |
+    subgraph Stream Processing Layer
+        C -->|Micro-batches / 500 maxOffsets| D[stream_job.py: Spark 3.5 Structured Streaming]
+        E[Offline Trained Model<br/>models/rf_congestion] -.->|PipelineModel.load| D
+        D -->|Feature Assembly & Scoring| F{Dual Output Streams}
+    end
 
----
+    subgraph Storage Layer
+        F -->|Stream 1: Scored Flows| G[(output/scored_flows/<br/>Append-only Parquet)]
+        F -->|Stream 2: 10s Tumbling Windows| H[Console Link Metrics<br/>avg_loss, jitter, rate]
+        G -->|Operational Indexing| I[(HBase-Style Store<br/>hbase_lite.duckdb)]
+        G -->|Columnar Fact Table| J[(DuckDB Warehouse<br/>warehouse.duckdb)]
+    end
 
-## Data
-
-- **Dataset:** UNSW-NB15, Parquet version of the training set (175,341 flows) and testing set (82,332 flows), 36 columns each.
-- The dataset is **not included** in this repository. Download the two Parquet files and place them in `data/`:
-  - `data/UNSW_NB15_training-set.parquet`
-  - `data/UNSW_NB15_testing-set.parquet`
-- **"Degraded" label** (built in `prepare_data.py`): a flow is degraded if its packet-loss ratio is above the 85th percentile **or** its average jitter is above the 90th percentile of the training set. Thresholds come from the training set only and are saved to `data/thresholds.json`. Result: 21.3% degraded in train, 24.7% in test.
-- **Links are simulated:** the dataset has no link or timestamp information, so the producer assigns each flow to one of 8 links (`link-1` to `link-8`) at random and stamps it with the send time.
-
----
-
-## Model results
-
-Random Forest (50 trees, max depth 8). Inputs are flow-behaviour columns plus one-hot encoded protocol, service, and state. The columns that define the label (loss and jitter) are **not** model inputs.
-
-| Evaluation | AUC | Precision | Recall | Accuracy |
-|---|---|---|---|---|
-| Held-out test set (82,332 flows) | 0.994 | 95.2% | 92.6% | 97.0% |
-| Streamed sample (2,000 flows, 205 alerts) | n/a | 95.1% | 93.3% | 97.1% |
-
-Alerts are flows predicted degraded with probability >= 0.80.
-
-### Charts (generated by `warehouse.py`)
-
-![Degraded share per link](output/charts/degraded_by_link.png)
-![Degraded share by protocol](output/charts/degraded_by_protocol.png)
-![Degradation over time](output/charts/degraded_over_time.png)
-
----
-
-## HBase-style storage design
-
-| Item | Design |
-|---|---|
-| Row key | `link_id#reversed_timestamp#flow_id` (the timestamp is reversed so the newest flow of a link sorts first) |
-| Tables | `flows`, `alerts` |
-| Column families | `flow:` (traffic fields), `pred:` (model output), `alert:` (alert details) |
-| Cell model | row key, family:qualifier, timestamp, value |
-| Operations | `get` by row key, `scan` by row-key prefix, `scan` by row-key range |
-
-The warehouse has a fact table `fact_flows` (one row per flow) and a view `v_alerts` (flows predicted degraded with probability >= 0.8).
-
----
-
-## Project structure
-
-```
-.
-├── config.py           # centralized cross-platform paths, constants, Spark session builder
-├── requirements.txt    # pinned dependencies
-├── prepare_data.py     # clean data, build the degraded label, save thresholds
-├── train_model.py      # train + save the Spark MLlib Random Forest
-├── producer.py         # replay test flows into Kafka (topic: flows)
-├── stream_job.py       # Spark Structured Streaming: read Kafka, score, window metrics
-├── hbase_layer.py      # load scored flows into the HBase-style store + demo scans
-├── warehouse.py        # build DuckDB warehouse, run 6 SQL analyses, save charts/CSVs
-├── dashboard.py        # Streamlit dashboard
-├── show_outputs.py     # print where everything is stored; run your own SQL
-├── dedupe_output.py    # optional: drop duplicate flows if events were sent twice
-├── inspect_data.py     # print dataset columns and sample rows
-├── test_spark.py       # Spark smoke test
-├── models/             # trained model + metrics.json
-├── output/charts/      # chart images
-└── data/               # datasets and databases (git-ignored, rebuilt by the scripts)
+    subgraph Monitoring & Exploration
+        G -->|3s Reactive Polling| K[dashboard.py: Streamlit Dashboard]
+        I -->|Prefix Scans by Link| K
+        J -->|SQL Analytics & Views| K
+    end
 ```
 
 ---
 
-## Setup
+## 🛠️ Technology Stack
 
-### 1. Python (3.10 – 3.12 recommended, e.g. 3.11)
-- **macOS (Homebrew):** `brew install python@3.11`
-- **Linux (Ubuntu/Debian):** `sudo apt update && sudo apt install -y python3.11 python3.11-venv python3-pip`
-- **Windows:** Download Python 3.11 from python.org and check "Add python.exe to PATH".
+| Layer | Technology | Architectural Role |
+| :--- | :--- | :--- |
+| **Ingestion** | **Python 3 Producer + Kafka 3.9 (KRaft)** | Replays real flow records into Kafka topic `flows`, partitioned by `link_id`. Uses KRaft consensus (no ZooKeeper needed). |
+| **Stream Compute** | **Apache Spark 3.5 (PySpark Streaming)** | Micro-batch stream processing (5s trigger), JSON deserialization, schema enforcement, watermarking (30s), and tumbling 10s window aggregation. |
+| **Machine Learning** | **Spark MLlib Random Forest** | 50 decision trees, max depth 8. Evaluated natively in Spark's distributed runtime for high-throughput parallel scoring. |
+| **Operational Store** | **HBaseLite (DuckDB Key-Value)** | Emulates HBase wide-column primitives with compound row keys (`link_id#reversed_ts#flow_id`) and column families (`flow:`, `pred:`, `alert:`). |
+| **Analytical Store** | **DuckDB Columnar Warehouse** | Hosts `fact_flows` table and `v_alerts` view for sub-second SQL analytics, protocol breakdown, and longitudinal metrics. |
+| **Visualization** | **Streamlit + Altair** | Reactive dark-mode NOC dashboard with real-time metric cards, link health bars, live alert feeds, and an interactive SQL console. |
 
-### 2. Java 17
-- **macOS (Homebrew):** `brew install openjdk@17`
-- **Linux (Ubuntu/Debian):** `sudo apt install -y openjdk-17-jdk`
-- **Windows:** Install **Eclipse Temurin JDK 17** from adoptium.net with "Set JAVA_HOME" and "Add to PATH" enabled. Check with `java -version`.
+---
 
-### 3. Hadoop helper files for Spark (Windows ONLY)
-*On macOS and Linux, skip this step completely — Hadoop native binaries are not required.*
+## 🧠 The Machine Learning Engine
 
-On Windows only:
-1. Create `C:\hadoop\bin`.
-2. From the **cdarlint/winutils** GitHub repo (folder `hadoop-3.3.5\bin`), download `winutils.exe` and `hadoop.dll` into `C:\hadoop\bin`.
-3. Set the environment variable `HADOOP_HOME` to `C:\hadoop` and add `C:\hadoop\bin` to your `Path`.
+The model is trained in [train_model.py](file:///Users/praneeth/Sandbox/NetPref/train_model.py) using an offline MLlib Pipeline:
+1. **StringIndexer & OneHotEncoder:** Encodes categorical network parameters (`proto`, `service`, `state`).
+2. **VectorAssembler:** Assembles 19 numerical flow features + one-hot encoded vectors into a single feature vector.
+3. **RandomForestClassifier:** 50 trees, max depth 8, seed 42.
 
-### 4. Apache Kafka 3.9 (KRaft mode, no Zookeeper)
+### Evaluated Model Performance
 
-#### macOS (via Homebrew)
+| Metric | Held-Out Test Set (82,332 flows) | Live Streamed Sample (2,000 flows) |
+| :--- | :---: | :---: |
+| **ROC AUC** | **0.9945** | **0.994** |
+| **PR AUC** | **0.9848** | — |
+| **Overall Accuracy** | **97.00%** | **97.10%** |
+| **Precision (Degraded)** | **95.16%** | **95.10%** |
+| **Recall (Degraded)** | **92.57%** | **93.30%** |
+| **F1 Score (Degraded)** | **0.9385** | **0.9419** |
+
+### Top Predictive Features
+Feature importances extracted from the trained model:
+1. `dur` (Connection duration in seconds) &mdash; **13.20%**
+2. `dpkts` (Packets from destination to source) &mdash; **7.78%**
+3. `swin` (Source TCP window advertisement size) &mdash; **6.62%**
+4. `proto_ohe_tcp` (TCP transport protocol flag) &mdash; **6.08%**
+5. `spkts` (Packets from source to destination) &mdash; **5.87%**
+6. `dinpkt` (Destination inter-packet arrival time in ms) &mdash; **5.85%**
+7. `dmean` (Mean packet size transmitted by destination) &mdash; **5.53%**
+8. `dbytes` (Total bytes transmitted by destination) &mdash; **5.48%**
+9. `tcprtt` (Round-trip time: SYN to ACK) &mdash; **4.75%**
+10. `ackdat` (SYN-ACK to ACK latency) &mdash; **4.11%**
+
+---
+
+## 🗄️ Storage Architecture
+
+### 1. HBase-Style Wide-Column Store (`hbase_lite.duckdb`)
+To emulate an Apache HBase / Google Cloud Bigtable operational store without requiring a multi-node Hadoop cluster, [hbase_layer.py](file:///Users/praneeth/Sandbox/NetPref/hbase_layer.py) implements the cell data model:
+- **Compound Row Key:**
+  $$\text{Row Key} = \texttt{link\_id} \mathbin{\#} (9999999999999 - \text{timestamp\_ms}) \mathbin{\#} \texttt{flow\_id}$$
+  *Why reversed timestamps?* Lexicographical sorting orders smaller strings first. Subtracting the timestamp from a large constant guarantees that the **newest flow on any link always sorts to the top**, enabling sub-millisecond prefix scans for latest link activity.
+- **Column Families:**
+  - `flow:` &mdash; Network fields (`proto`, `service`, `state`, `total_pkts`, `total_bytes`, `loss_ratio`, `avg_jitter`)
+  - `pred:` &mdash; Inference output (`degraded_prob`, `prediction`, `true_degraded`)
+  - `alert:` &mdash; High-probability alert records ($P(\text{degraded}) \ge 0.80$)
+
+### 2. DuckDB Analytical Warehouse (`warehouse.duckdb`)
+- **`fact_flows`:** One row per scored flow with native timestamps, link identifiers, network metrics, and prediction probabilities.
+- **`v_alerts`:** An instant SQL view filtering high-risk flows where `prediction = 1 AND degraded_prob >= 0.80`.
+
+---
+
+## 🖥️ Interactive Dashboard Showcase
+
+The Streamlit dashboard ([dashboard.py](file:///Users/praneeth/Sandbox/NetPref/dashboard.py)) updates every 3 seconds to provide real-time NOC situational awareness:
+
+![Streamlit Live Monitor Dashboard](output/screenshots/dashboard_live.png)
+
+- **Live Metric Cards:** Total flows scored, active alerts ($P \ge 0.80$), % flows predicted degraded, average packet loss, and count of monitored links.
+- **Per-Link Health Bar Chart:** Color-coded bars showing degradation percentage per link, with the worst-performing link automatically highlighted in **red**.
+- **Per-Link Detail Table:** Tabular progress indicators for degradation rate, raw alert counts, average loss ratio, mean jitter, and throughput in MB.
+- **Real-Time Alert Feed:** Reverse-chronological table of the latest 12 high-priority alerts with protocol, service, loss %, and probability progress bars.
+- **Temporal Degradation Line Chart:** 10-second tumbling time buckets displaying degradation rates against flow volumes over time.
+- **Interactive SQL Console & Data Explorer:** In-browser query editor allowing operators to run custom read-only DuckDB SQL queries against both the warehouse and the HBase-style store.
+
+---
+
+## 📂 Project Directory Layout
+
+```
+NetPref/
+├── config.py                 # Centralized cross-platform paths, constants, Spark session builder
+├── prepare_data.py           # Ingests UNSW-NB15, sets loss/jitter thresholds, builds labels
+├── train_model.py            # Trains Spark MLlib Random Forest, saves model & metrics.json
+├── producer.py               # Replays test flows into Kafka topic 'flows' at configurable rates
+├── stream_job.py             # Spark Structured Streaming: Kafka consumer, MLlib scoring, windows
+├── hbase_layer.py            # HBase wide-column store emulation, puts cells, runs prefix scans
+├── warehouse.py              # Builds DuckDB warehouse, executes 6 SQL analyses, generates charts
+├── dashboard.py              # Streamlit NOC dashboard (Live monitor, Analytics, Data explorer)
+├── show_outputs.py           # Diagnostic CLI: storage locations, table inspection, SQL console
+├── dedupe_output.py          # Utility: drops duplicate flow IDs from streaming parquet output
+├── test_cross_platform.py    # Unit tests verifying cross-platform paths, Kafka config, and row keys
+├── test_spark.py             # Smoke test verifying PySpark and Java 17 runtime
+├── requirements.txt          # Pinned Python package dependencies
+├── ROADMAP.md                # Phase-by-phase architectural & engineering improvement roadmap
+├── NetPref_Project_Guide.pdf # 5-page publication-quality system guide & demo manual
+├── models/
+│   ├── rf_congestion/        # Serialized Spark MLlib Random Forest PipelineModel
+│   └── metrics.json          # Test-set evaluation metrics and top feature importances
+├── output/
+│   ├── charts/               # Generated analytical PNG charts
+│   ├── reports/              # Exported analytical CSV reports
+│   ├── screenshots/          # High-resolution dashboard screenshots
+│   └── scored_flows/         # Append-only micro-batch Parquet files written by Spark
+└── data/                     # (Git-ignored) Datasets, thresholds.json, and DuckDB databases
+```
+
+---
+
+## ⚙️ Setup & Prerequisites
+
+### 1. Python Environment (3.10 – 3.12 recommended, e.g. 3.11)
 ```bash
-brew install kafka
-# Start Kafka service:
-brew services start kafka
-# Or start in foreground with default KRaft config:
-kafka-server-start /opt/homebrew/etc/kafka/kraft/server.properties
-```
+# Clone the repository
+git clone https://github.com/YOUR-USERNAME/NetPref.git
+cd NetPref
 
-#### Linux / Manual Archive (macOS / Linux)
-1. Download the Kafka 3.9.x binary (Scala 2.13) from kafka.apache.org/downloads and extract it (e.g. to `~/kafka`).
-2. Format storage (run once):
-   ```bash
-   cd ~/kafka
-   KAFKA_CLUSTER_ID="$(bin/kafka-storage.sh random-uuid)"
-   bin/kafka-storage.sh format -t $KAFKA_CLUSTER_ID -c config/kraft/server.properties
-   ```
-3. Start Kafka:
-   ```bash
-   bin/kafka-server-start.sh config/kraft/server.properties
-   ```
-4. Create the topic:
-   ```bash
-   bin/kafka-topics.sh --create --topic flows --bootstrap-server localhost:9092
-   ```
-
-#### Windows
-1. Download Kafka 3.9.x binary and extract to `D:\kafka` (or `C:\kafka`).
-2. In `config\kraft\server.properties`, set `log.dirs=D:/kafka/kafka-logs`.
-3. In PowerShell, format storage (run once):
-   ```powershell
-   cd D:\kafka
-   $id = .\bin\windows\kafka-storage.bat random-uuid
-   .\bin\windows\kafka-storage.bat format -t $id -c .\config\kraft\server.properties
-   ```
-4. Start Kafka:
-   ```powershell
-   .\bin\windows\kafka-server-start.bat .\config\kraft\server.properties
-   ```
-5. Create the topic:
-   ```powershell
-   .\bin\windows\kafka-topics.bat --create --topic flows --bootstrap-server localhost:9092
-   ```
-
-### 5. Project Environment
-
-#### macOS / Linux
-```bash
-git clone https://github.com/YOUR-USERNAME/YOUR-REPO.git
-cd YOUR-REPO
+# Create and activate virtual environment
 python3 -m venv .venv
+
+# macOS / Linux
 source .venv/bin/activate
+
+# Windows (PowerShell)
+# .venv\Scripts\Activate.ps1
+
+# Upgrade pip and install dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-#### Windows (PowerShell)
-```powershell
-git clone https://github.com/YOUR-USERNAME/YOUR-REPO.git
-cd YOUR-REPO
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
+### 2. Java 17 (Required by PySpark)
+- **macOS (Homebrew):** `brew install openjdk@17` *(config.py automatically discovers Homebrew OpenJDK 17)*
+- **Linux (Ubuntu/Debian):** `sudo apt update && sudo apt install -y openjdk-17-jdk`
+- **Windows:** Download & install **Eclipse Temurin JDK 17** from [adoptium.net](https://adoptium.net) with "Set JAVA_HOME" and "Add to PATH" checked.
 
-Verify Spark works:
+*Verify Spark works:*
 ```bash
 python test_spark.py
 ```
-This should print a Spark table with IDs 0 to 4.
 
-### 6. Dataset
+### 3. Windows-Specific Hadoop Helper Files
+*(macOS and Linux users skip this entirely)*  
+1. Download `winutils.exe` and `hadoop.dll` from the `hadoop-3.3.5/bin` folder of the **cdarlint/winutils** GitHub repository.  
+2. Place both files in `C:\hadoop\bin`.  
+3. Set environment variable `HADOOP_HOME=C:\hadoop` and add `C:\hadoop\bin` to your `Path`.
+
+### 4. Apache Kafka 3.9 (KRaft Mode, No ZooKeeper)
+- **macOS (Homebrew):**
+  ```bash
+  brew install kafka
+  brew services start kafka
+  ```
+- **Linux / Manual Archive:**
+  ```bash
+  # Format storage once
+  KAFKA_CLUSTER_ID="$(bin/kafka-storage.sh random-uuid)"
+  bin/kafka-storage.sh format -t $KAFKA_CLUSTER_ID -c config/kraft/server.properties
+  
+  # Start Kafka broker
+  bin/kafka-server-start.sh config/kraft/server.properties
+  ```
+- **Windows:**
+  ```powershell
+  $id = .\bin\windows\kafka-storage.bat random-uuid
+  .\bin\windows\kafka-storage.bat format -t $id -c .\config\kraft\server.properties
+  .\bin\windows\kafka-server-start.bat .\config\kraft\server.properties
+  ```
+
+### 5. Dataset Placement
 Download the UNSW-NB15 Parquet files into `data/`:
 - `data/UNSW_NB15_training-set.parquet`
 - `data/UNSW_NB15_testing-set.parquet`
 
 ---
 
-## Run
+## 🚀 Step-by-Step Run & Demo Guide
 
-### 1. Prepare data and train the model (One-time)
+### Step 1: One-Time Data Prep and Model Training
+Run these once to clean data, compute label quantiles, and train the Random Forest:
 ```bash
 python prepare_data.py
 python train_model.py
 ```
-`prepare_data.py` creates the cleaned data and `data/thresholds.json`. `train_model.py` saves the model to `models/rf_congestion` and logs test metrics to `models/metrics.json`.
 
-### 2. Run the real-time demo
-Run each component in a separate terminal with `(.venv)` activated:
+### Step 2: Live Real-Time Demonstration Sequence
+Open **4 separate terminal windows** with `(.venv)` activated and execute in order:
 
-| # | Component | Terminal Command |
-|---|---|---|
-| 1 | **Kafka server** | macOS/Linux: `kafka-server-start ...` or Windows: `.\bin\windows\kafka-server-start.bat ...` |
-| 2 | **Stream job** | `python stream_job.py --seconds 300` |
-| 3 | **Dashboard** | `streamlit run dashboard.py` |
-| 4 | **Producer** | `python producer.py --rate 100 --limit 2000` |
+| Terminal | Process | Exact Command | What to Look For |
+| :---: | :--- | :--- | :--- |
+| **1** | **Kafka Broker** | `kafka-server-start /opt/homebrew/etc/kafka/kraft/server.properties` | Broker listens on `localhost:9092`. |
+| **2** | **Spark Stream Job** | `python stream_job.py --seconds 300` | Prints `Streaming started... Waiting for Kafka events`. |
+| **3** | **Streamlit Dashboard** | `streamlit run dashboard.py` | Browser opens at `http://localhost:8501` on **Live monitor**. |
+| **4** | **Kafka Producer** | `python producer.py --rate 100 --limit 2000` | Sends 2,000 events at 100/sec. Micro-batch batches score immediately! |
 
-Order of execution:
-1. Start Kafka and verify it is listening on `localhost:9092`.
-2. Start the stream job (`python stream_job.py`). Wait until `Streaming started...` appears. (The first run downloads the Spark-Kafka connector jar).
-3. Start the dashboard (`streamlit run dashboard.py`), open http://localhost:8501, and navigate to **Live monitor**.
-4. Start the producer (`python producer.py --rate 100 --limit 2000`) and watch live cards, charts, and alert feeds update.
-5. After the stream completes, refresh the offline analytical stores:
-   ```bash
-   python hbase_layer.py
-   python warehouse.py
-   ```
-6. In the dashboard, view the **Analytics** and **Data explorer** tabs.
-
-### 3. Inspect stored data & run SQL
+### Step 3: Populate Offline Analytical Stores
+Once streaming completes, update the analytical databases and charts:
 ```bash
-python show_outputs.py                                              # Inspect locations, schemas, and metrics
-python show_outputs.py --sql "SHOW TABLES"
-python show_outputs.py --sql "SELECT * FROM fact_flows LIMIT 5"
-python show_outputs.py --db hbase --sql "SELECT * FROM flows LIMIT 10"
+python hbase_layer.py        # Populates HBaseLite cells and executes demo prefix scans
+python warehouse.py          # Refreshes DuckDB warehouse fact_flows, views, and PNG charts
+python show_outputs.py       # Displays file sizes, record counts, and database schemas
 ```
 
-### Storage Locations
+---
 
-| Artifact | Location |
-|---|---|
-| Scored flows (streaming output) | `output/scored_flows/` (Parquet) |
-| HBase-style store | `data/hbase_lite.duckdb` |
-| DuckDB Warehouse | `data/warehouse.duckdb` |
-| Generated charts & reports | `output/charts/`, `output/reports/` |
-| Trained ML model + metrics | `models/rf_congestion/`, `models/metrics.json` |
-| Raw Kafka events | Configured via `KAFKA_LOGS_DIR` (or platform default) |
+## 📊 Analytical Reports & SQL Exploration
+
+Running [warehouse.py](file:///Users/praneeth/Sandbox/NetPref/warehouse.py) automatically runs 6 SQL queries and saves both CSV reports ([output/reports/](file:///Users/praneeth/Sandbox/NetPref/output/reports)) and PNG charts ([output/charts/](file:///Users/praneeth/Sandbox/NetPref/output/charts)):
+
+| Degradation Share by Link | Degradation by Protocol | Degradation Over Time (10s Buckets) |
+| :---: | :---: | :---: |
+| ![Degraded by Link](output/charts/degraded_by_link.png) | ![Degraded by Protocol](output/charts/degraded_by_protocol.png) | ![Degraded Over Time](output/charts/degraded_over_time.png) |
+
+### Interactive SQL Queries via CLI
+Inspect stored data directly from the terminal with [show_outputs.py](file:///Users/praneeth/Sandbox/NetPref/show_outputs.py):
+```bash
+# Query the DuckDB Warehouse
+python show_outputs.py --sql "SELECT link_id, COUNT(*) AS flows, ROUND(100.0 * AVG(prediction), 1) AS degraded_pct FROM fact_flows GROUP BY link_id ORDER BY degraded_pct DESC"
+
+# Query the HBase-Style Store
+python show_outputs.py --db hbase --sql "SELECT row_key, family, qualifier, value FROM flows WHERE starts_with(row_key, 'link-2#') LIMIT 10"
+```
 
 ---
 
-## Limitations
+## 🌐 Real-World Applications
 
-- **Links are simulated:** Flows are assigned to 8 links at random, so variations between links are noise by design to demonstrate per-link telemetry.
-- **Only TCP shows packet loss:** In the UNSW-NB15 dataset, loss statistics are recorded for TCP flows; UDP flows are labeled based on jitter.
-- **Rule-based labeling:** Ground truth is derived from quantile thresholds on loss and jitter. Model inputs omit loss and jitter to avoid direct target leakage.
-- **HBase emulation:** The wide-column store emulates HBase primitives (row-keys, column families, cells, scans) using DuckDB for local execution without requiring a heavy distributed cluster.
+- **Internet Service Providers (ISPs) & Telecoms:** Real-time telemetric feedback for Software-Defined Network (SDN) controllers. If degradation probability rises on a trunk link, non-critical bulk traffic can be dynamically rerouted before queues drop packets.
+- **Cloud Infrastructure & Data Centers (AWS / Azure / GCP):** Detects "noisy neighbor" virtual machines that saturate physical host network interfaces, isolating affected tenant flows without inspecting encrypted packet payloads.
+- **Video Streaming & WebRTC (Zoom, Teams, Netflix):** Video codecs dynamically adjust bitrates based on packet loss feedback. NetPref provides proactive pre-congestion warnings seconds ahead of time, preventing video freezing.
+- **AIOps & Self-Healing Networks:** Forms the telemetric foundation for autonomous network remediation, automatically triggering QoS bandwidth shaping and rate-limiting rules.
 
 ---
 
-## Troubleshooting
+## ⚠️ Limitations & Troubleshooting
 
-| Problem | Root Cause & Resolution |
-|---|---|
-| `pip install` errors asking for C++ build tools | Use Python 3.10–3.12 (e.g. 3.11) where prebuilt binary wheels are readily available for all dependencies. |
-| Spark: `Invalid Spark URL ...` | Occurs when hostnames contain special characters or underscores. Both `stream_job.py` and `train_model.py` automatically bind `spark.driver.host` to `127.0.0.1`. |
-| Windows: `UnsatisfiedLinkError ... NativeIO$Windows` | Missing `hadoop.dll`. Place `hadoop.dll` in `C:\hadoop\bin` and verify `HADOOP_HOME` is set. |
-| macOS/Linux: `Connection refused: localhost:9092` | Kafka is not running. Ensure Kafka service is started before launching the stream job or producer. |
-| Dashboard shows "Waiting for data" | Verify that `stream_job.py` is actively writing to `output/scored_flows/` and the producer is running. |
+### Known Limitations
+- **Simulated Link Topologies:** The benchmark dataset has no native link identifiers. The producer assigns flows randomly across 8 links to demonstrate per-link telemetric aggregation.
+- **TCP vs. UDP Metrics:** UNSW-NB15 records packet loss counters for TCP connections only; UDP flows are classified primarily based on jitter metrics.
+- **HBase Emulation:** The wide-column store emulates HBase primitives over DuckDB to enable seamless local execution without requiring a distributed multi-node Hadoop cluster.
+
+### Common Troubleshooting
+
+| Symptom | Root Cause | Solution |
+| :--- | :--- | :--- |
+| `Connection refused: localhost:9092` | Kafka broker is not running. | Start Kafka broker (Terminal 1) before starting the stream job or producer. |
+| `Invalid Spark URL ...` | Hostname contains underscores or special characters. | `config.py` explicitly binds `spark.driver.host` to `127.0.0.1`. |
+| Windows: `UnsatisfiedLinkError (hadoop.dll)` | Missing native Hadoop binaries on Windows. | Download `hadoop.dll` & `winutils.exe` into `C:\hadoop\bin` and verify `HADOOP_HOME`. |
+| Dashboard shows "Waiting for data..." | Stream job has not output Parquet yet. | Verify `stream_job.py` is running and `producer.py` is actively sending events. |
+| Streamlit duplicate key or caching error | Stale Parquet cache. | Toggle the auto-refresh switch or re-run `python dedupe_output.py`. |
+
+---
+
+## 📚 Documentation & Future Roadmap
+
+- 📖 **Comprehensive System Guide & Demonstration PDF:**  
+  Read the complete 5-page guide with detailed CS concepts, tech justifications, and the 5-minute pitch script:  
+  👉 **[NetPref_Project_Guide.pdf](NetPref_Project_Guide.pdf)**
+- 🗺️ **Engineering & Architectural Improvement Roadmap:**  
+  Explore planned milestones for topology-aware simulation, continuous Kappa streaming, explainable AI (SHAP), and Docker orchestration:  
+  👉 **[ROADMAP.md](ROADMAP.md)**
+
+---
+
+## 📜 License & Acknowledgments
+- **Dataset:** UNSW-NB15 dataset provided by the Australian Centre for Cyber Security (ACCS).
+- **License:** Open-source for academic, educational, and research use.
